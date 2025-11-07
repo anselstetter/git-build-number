@@ -1,0 +1,195 @@
+#!/usr/bin/env bash
+
+###############################################################################
+# Environment
+###############################################################################
+function branch_name {
+  echo "${BRANCH_NAME:=$(git branch --show-current)}"
+}
+
+function root_directory {
+  echo "${ROOT_DIRECTORY:=$(git rev-parse --show-toplevel)}"
+}
+
+function ci_directory {
+  echo "$(root_directory)/.ci"
+}
+
+function source_directory {
+  echo "$(root_directory)/cmd/git-build-number"
+}
+
+function docs_directory {
+  echo "$(root_directory)/docs"
+}
+
+
+function release_directory {
+  echo "${RELEASE_DIRECTORY:=$(root_directory)/release}"
+}
+
+function tag {
+  echo "${TAG:=$(git describe --tags)}"
+}
+
+function version {
+  local tag="$(tag)"
+
+  echo "${tag#v}"
+}
+
+function setup_environment {
+  local base_config="$(ci_directory)/config.env"
+  local branch_config="$(ci_directory)/config.$(branch_name).env"
+
+  if [[ -f "${base_config}" ]]; then
+    export_env "${base_config}"
+  fi
+
+  if [[ -f "${branch_config}" ]]; then
+    export_env "${branch_config}"
+  fi
+}
+
+function export_env {
+  local env="${1}"
+
+  while read -r line; do
+    local key="${line%=*}"
+    local val="${line#*=}"
+
+    if [[ -z "${!key}" ]]; then
+      local cleaned="${val//\"/}"
+
+      export ${key}="${cleaned}"
+    fi
+  done < "${env}"
+}
+
+function ensure_environment {
+  local required_vars=("${@}")
+  local missing_vars=()
+  local var
+
+  for var in "${required_vars[@]}"; do
+    if [[ -z "${!var}" ]]; then
+      missing_vars+=(${var})
+    fi
+  done
+
+  if (( ${#missing_vars[@]} )); then
+    for var in "${missing_vars[@]}"; do
+      printf "%s\n" "Please set ${var}."
+    done
+
+    exit 1
+  fi
+}
+
+function ensure_binaries {
+  local required_binaries=("${@}")
+  local missing_binaries=()
+  local var
+
+  for var in "${required_binaries[@]}"; do
+    if ! which "${var}" &> /dev/null; then
+      missing_binaries+=(${var})
+    fi
+  done
+
+  if (( ${#missing_binaries[@]} )); then
+    for var in "${missing_binaries[@]}"; do
+      printf "%s\n" "Please install ${var}."
+    done
+
+    exit 1
+  fi
+}
+
+###############################################################################
+# Tasks
+###############################################################################
+function generate_docs {
+  go run "$(source_directory)/main.go" generate-docs --format md "$(docs_directory)"
+}
+
+function test {
+  go test -v "$(root_directory)/..."
+}
+
+function test_cover {
+  go test "$(root_directory)/..." -covermode=count -coverprofile=/tmp/coverage.out &>/dev/null
+  
+  # Hack to filter test utils and doc generation out
+  grep -v -E -f "$(root_directory)/.covignore" /tmp/coverage.out > /tmp/coverage.filtered.out
+  mv /tmp/coverage.filtered.out /tmp/coverage.out
+
+  go tool cover -func "/tmp/coverage.out" -o="/tmp/coverage.out"
+  cat "/tmp/coverage.out"
+}
+
+function test_cover_badge {
+  test_cover
+
+  echo "Installing gobadge"
+  go install github.com/AlexBeauchemin/gobadge@latest
+
+  echo "Running gobadge"
+  gobadge -filename "/tmp/coverage.out" -target "$(root_directory)/README.md"
+}
+
+function lint {
+  local exitCode=0
+
+  echo "Installing tools"
+  go install tool
+
+  echo "Running golangci-lint"
+  golangci-lint run "$(root_directory)/..." || exitCode=1
+
+  exit ${exitCode}
+}
+
+function compile {
+  local os="${1}"
+  local arch="${2}"
+  local version="${3}"
+  local source="${4}"
+  local destination="${5}"
+
+  echo "Building ${destination}/git-build-number-${version}.${os}.${arch}"
+  GOOS="${os}" GOARCH="${arch}" go build -o "${destination}/git-build-number-${version}.${os}.${arch}" -ldflags "-s -w -X main.Version=${version}" "${source}"
+}
+
+function cross_compile {
+  mkdir -p "$(release_directory)"
+
+  local os=(${OS// / })
+  local arch=(${ARCH// / })
+
+  export -f compile
+
+  go mod download
+  parallel -j0 compile {1} {2} "$(version)" "$(source_directory)" $(release_directory) ::: "${os[@]}" ::: "${arch[@]}"
+}
+
+function release {
+  ensure_environment "GH_TOKEN"
+
+  local tag="$(tag)"
+  local version="$(version)"
+
+  gh release create "${tag}" \
+    --title="${version}" \
+    --notes-from-tag \
+    "$(release_directory)"/git-build-number-*
+}
+
+###############################################################################
+# Entry point
+###############################################################################
+setup_environment
+ensure_environment "OS" "ARCH"
+ensure_binaries "parallel"
+
+"${@}"

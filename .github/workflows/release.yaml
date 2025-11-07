@@ -1,0 +1,43 @@
+name: Release
+on:
+  push:
+    tags:
+      - "v*"
+  pull_request:
+    paths:
+      - '.github/workflows/release.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build and release
+    runs-on: "ubuntu-latest"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+           # This will include all tags.
+           # Otherwise, the commit message will be used as release notes.
+           ref: ${{ github.ref }}
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: "./go.mod"
+
+      - name: Build
+        id: "build"
+        run: |
+          export RELEASE_DIRECTORY="$(mktemp -d)"
+          ./scripts/ci cross_compile
+
+          echo "release_directory=${RELEASE_DIRECTORY}" >> ${GITHUB_OUTPUT}
+
+      - name: Release
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_DIRECTORY: ${{steps.build.outputs.release_directory}}
+        run: ./scripts/ci release

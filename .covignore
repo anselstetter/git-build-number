@@ -1,0 +1,5 @@
+# Internal documentation generation
+github.com/anselstetter/git-build-number/internal/cmd/generate_docs.go
+# Empty containers
+github.com/anselstetter/git-build-number/internal/cmd/root.go
+github.com/anselstetter/git-build-number/internal/cmd/namespace.go

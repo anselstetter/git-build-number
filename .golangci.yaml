@@ -1,0 +1,16 @@
+version: "2"
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign 
+    - staticcheck 
+    - unused
+    - exhaustive
+    - gocyclo
+    - misspell
+  exclusions:
+    rules:
+      - linters:
+          - errcheck
+        source: "^\\s*defer\\s+"
